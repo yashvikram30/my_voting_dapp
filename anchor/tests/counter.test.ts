@@ -1,76 +1,104 @@
 import * as anchor from '@coral-xyz/anchor'
 import { Program } from '@coral-xyz/anchor'
-import { Keypair } from '@solana/web3.js'
-import { Counter } from '../target/types/counter'
+import { PublicKey } from '@solana/web3.js'
+import { Voting } from 'anchor/target/types/voting'
+import { BankrunProvider, startAnchor } from 'anchor-bankrun'
 
-describe('counter', () => {
-  // Configure the client to use the local cluster.
-  const provider = anchor.AnchorProvider.env()
-  anchor.setProvider(provider)
-  const payer = provider.wallet as anchor.Wallet
+import IDL from '../target/idl/voting.json'
+const votingAddress = new PublicKey('FqzkXZdwYjurnUKetJCAvaUw5WAqbwzU6gZEwydeEfqS')
 
-  const program = anchor.workspace.Counter as Program<Counter>
+describe('voting', () => {
+  let context
+  let provider
+  let votingProgram
 
-  const counterKeypair = Keypair.generate()
+  beforeAll(async () => {
+    context = await startAnchor('', [{ name: 'voting', programId: votingAddress }], [])
+    provider = new BankrunProvider(context)
 
-  it('Initialize Counter', async () => {
-    await program.methods
-      .initialize()
-      .accounts({
-        counter: counterKeypair.publicKey,
-        payer: payer.publicKey,
-      })
-      .signers([counterKeypair])
+    votingProgram = new Program<Voting>(IDL, provider)
+  })
+
+  it('Initialize Poll', async () => {
+    await votingProgram.methods
+      .initializePoll(
+        new anchor.BN(1),
+        'what is your favourite programming language?',
+        new anchor.BN(0), // poll start time 
+        new anchor.BN(1935776000), // poll end time 
+      )
       .rpc()
 
-    const currentCount = await program.account.counter.fetch(counterKeypair.publicKey)
+    const [pollAccount] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, 'le', 8)],
+      votingAddress,
+    )
+    const poll = await votingProgram.account.poll.fetch(pollAccount)
 
-    expect(currentCount.count).toEqual(0)
+    console.log(poll)
+
+    expect(poll.pollId.toNumber()).toEqual(1)
+    expect(poll.description).toEqual('what is your favourite programming language?')
+    expect(poll.pollStart.toNumber()).toBeLessThanOrEqual(poll.pollEnd.toNumber())
   })
 
-  it('Increment Counter', async () => {
-    await program.methods.increment().accounts({ counter: counterKeypair.publicKey }).rpc()
+  it('initialize candidate', async () => {
+    await votingProgram.methods.initializeCandidate('Rust', new anchor.BN(1)).rpc()
+    await votingProgram.methods.initializeCandidate('JS', new anchor.BN(1)).rpc()
+    
+    const [rustAddress] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, 'le', 8), Buffer.from('Rust')],
+      votingAddress,
+    )
+    const rustCandidate = await votingProgram.account.candidate.fetch(rustAddress)
+    console.log('Rust candidate:', rustCandidate)
 
-    const currentCount = await program.account.counter.fetch(counterKeypair.publicKey)
+    const [jsAddress] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, 'le', 8), Buffer.from('JS')],
+      votingAddress,
+    )
+    const jsCandidate = await votingProgram.account.candidate.fetch(jsAddress)
+    console.log('JS candidate:', jsCandidate)
 
-    expect(currentCount.count).toEqual(1)
+    // Verify initial vote counts
+    expect(rustCandidate.candidateVotes.toNumber()).toEqual(0)
+    expect(jsCandidate.candidateVotes.toNumber()).toEqual(0)
   })
 
-  it('Increment Counter Again', async () => {
-    await program.methods.increment().accounts({ counter: counterKeypair.publicKey }).rpc()
-
-    const currentCount = await program.account.counter.fetch(counterKeypair.publicKey)
-
-    expect(currentCount.count).toEqual(2)
-  })
-
-  it('Decrement Counter', async () => {
-    await program.methods.decrement().accounts({ counter: counterKeypair.publicKey }).rpc()
-
-    const currentCount = await program.account.counter.fetch(counterKeypair.publicKey)
-
-    expect(currentCount.count).toEqual(1)
-  })
-
-  it('Set counter value', async () => {
-    await program.methods.set(42).accounts({ counter: counterKeypair.publicKey }).rpc()
-
-    const currentCount = await program.account.counter.fetch(counterKeypair.publicKey)
-
-    expect(currentCount.count).toEqual(42)
-  })
-
-  it('Set close the counter account', async () => {
-    await program.methods
-      .close()
-      .accounts({
-        payer: payer.publicKey,
-        counter: counterKeypair.publicKey,
-      })
+  it('vote', async () => {
+    // Cast votes for Rust
+    await votingProgram.methods
+      .vote(new anchor.BN(1), 'Rust')
       .rpc()
 
-    // The account should no longer exist, returning null.
-    const userAccount = await program.account.counter.fetchNullable(counterKeypair.publicKey)
-    expect(userAccount).toBeNull()
+    await votingProgram.methods
+      .vote(new anchor.BN(1), 'Rust')
+      .rpc()
+
+    // Cast vote for JS
+    await votingProgram.methods
+      .vote(new anchor.BN(1), 'JS')
+      .rpc()
+
+    // Check vote counts
+    const [rustAddress] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, 'le', 8), Buffer.from('Rust')],
+      votingAddress,
+    )
+    const rustCandidate = await votingProgram.account.candidate.fetch(rustAddress)
+
+    const [jsAddress] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, 'le', 8), Buffer.from('JS')],
+      votingAddress,
+    )
+    const jsCandidate = await votingProgram.account.candidate.fetch(jsAddress)
+
+    console.log('Final vote counts:')
+    console.log('Rust votes:', rustCandidate.candidateVotes.toNumber())
+    console.log('JS votes:', jsCandidate.candidateVotes.toNumber())
+
+    // Verify vote counts
+    expect(rustCandidate.candidateVotes.toNumber()).toEqual(2)
+    expect(jsCandidate.candidateVotes.toNumber()).toEqual(1)
   })
 })

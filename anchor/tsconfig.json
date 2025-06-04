@@ -5,9 +5,10 @@
     "types": ["jest", "node"],
     "typeRoots": ["./node_modules/@types"],
     "lib": ["es2015"],
-    "target": "es6",
+    "target": "esnext",
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "strict": true,
   }
 }
